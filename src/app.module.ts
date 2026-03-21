@@ -5,6 +5,7 @@ import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
 import { ExampleModule } from './example/example.module';
 import { EmailModule } from './email/email.module';
+import { UploadModule } from './upload/upload.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from './user/user.entity';
 
@@ -24,6 +25,7 @@ import { User } from './user/user.entity';
     AuthModule,
     ExampleModule,
     EmailModule,
+    UploadModule,
   ],
   controllers: [AppController],
   providers: [AppService],
