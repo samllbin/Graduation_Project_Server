@@ -6,7 +6,10 @@ import { AuthModule } from './auth/auth.module';
 import { ExampleModule } from './example/example.module';
 import { EmailModule } from './email/email.module';
 import { UploadModule } from './upload/upload.module';
+import { PostModule } from './post/post.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { PostImage } from './post/post-image.entity';
+import { Post } from './post/post.entity';
 import { User } from './user/user.entity';
 
 @Module({
@@ -18,7 +21,7 @@ import { User } from './user/user.entity';
       username: 'root',
       password: 'nnzabb123',
       database: 'Graduation_Project',
-      entities: [User],
+      entities: [User, Post, PostImage],
       synchronize: false,
     }),
     UserModule,
@@ -26,6 +29,7 @@ import { User } from './user/user.entity';
     ExampleModule,
     EmailModule,
     UploadModule,
+    PostModule,
   ],
   controllers: [AppController],
   providers: [AppService],
