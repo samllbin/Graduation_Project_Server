@@ -135,4 +135,79 @@ export class PostController {
       };
     }
   }
+
+  @UseGuards(AuthGuard)
+  @Post('comment/create')
+  async createComment(
+    @Body()
+    body: {
+      postId: number;
+      contentText?: string;
+      parentId?: number;
+      replyToUserId?: number;
+    },
+    @Req() req: any,
+  ) {
+    try {
+      const result = await this.postService.createComment({
+        postId: body?.postId,
+        contentText: body?.contentText,
+        parentId: body?.parentId,
+        replyToUserId: body?.replyToUserId,
+        currentUserId: req.user.sub,
+      });
+
+      return {
+        code: 200,
+        message: '评论成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
+
+  @Get('comment/list')
+  async commentList(@Query('postId') postId?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    try {
+      const result = await this.postService.getCommentList(
+        Number(postId),
+        page ? Number(page) : 1,
+        pageSize ? Number(pageSize) : 10,
+      );
+
+      return {
+        code: 200,
+        message: '获取评论列表成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('comment/delete')
+  async deleteComment(@Body() body: { id: number }, @Req() req: any) {
+    try {
+      const result = await this.postService.deleteComment(Number(body?.id), Number(req.user.sub));
+
+      return {
+        code: 200,
+        message: '删除评论成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
 }

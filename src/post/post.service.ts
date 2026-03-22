@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { PostImage } from './post-image.entity';
 import { PostLike } from './post-like.entity';
 import { Post } from './post.entity';
+import { Comment } from './comment.entity';
+import { User } from '../user/user.entity';
 
 type CreatePostImageInput = {
   imageUrl: string;
@@ -28,6 +30,10 @@ export class PostService {
     private postImagesRepository: Repository<PostImage>,
     @InjectRepository(PostLike)
     private postLikesRepository: Repository<PostLike>,
+    @InjectRepository(Comment)
+    private commentsRepository: Repository<Comment>,
+    @InjectRepository(User)
+    private usersRepository: Repository<User>,
     private dataSource: DataSource,
   ) {}
 
@@ -373,5 +379,387 @@ export class PostService {
     );
 
     return { id: post.id };
+  }
+
+  async createComment(input: {
+    postId: number;
+    contentText?: string;
+    parentId?: number;
+    replyToUserId?: number;
+    currentUserId: number;
+  }) {
+    const postId = Number(input.postId);
+    const currentUserId = Number(input.currentUserId);
+    const contentText = input.contentText?.trim() || '';
+    const parentId = input.parentId == null ? null : Number(input.parentId);
+    const replyToUserId = input.replyToUserId == null ? null : Number(input.replyToUserId);
+
+    if (!Number.isInteger(postId) || postId <= 0) {
+      const error: any = new Error('帖子不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    if (!contentText) {
+      const error: any = new Error('评论内容不能为空');
+      error.code = 400;
+      throw error;
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const post = await manager.findOne(Post, {
+        where: { id: postId, isDeleted: 0 },
+      });
+
+      if (!post) {
+        const error: any = new Error('帖子不存在');
+        error.code = 404;
+        throw error;
+      }
+
+      const now = new Date();
+      let level = 1;
+      let realParentId: number | null = null;
+      let rootId: number | null = null;
+      let realReplyToUserId: number | null = null;
+
+      if (parentId != null) {
+        if (!Number.isInteger(parentId) || parentId <= 0) {
+          const error: any = new Error('父评论不存在');
+          error.code = 400;
+          throw error;
+        }
+
+        const parent = await manager.findOne(Comment, {
+          where: { id: parentId, postId, isDeleted: 0 },
+        });
+
+        if (!parent) {
+          const error: any = new Error('父评论不存在');
+          error.code = 404;
+          throw error;
+        }
+
+        if (replyToUserId != null && (!Number.isInteger(replyToUserId) || replyToUserId <= 0)) {
+          const error: any = new Error('回复目标用户无效');
+          error.code = 400;
+          throw error;
+        }
+
+        let rootCommentId: number;
+        if (parent.level === 1) {
+          rootCommentId = parent.id;
+        } else {
+          rootCommentId = Number(parent.rootId || parent.parentId);
+          if (!Number.isInteger(rootCommentId) || rootCommentId <= 0) {
+            const error: any = new Error('父评论不存在');
+            error.code = 404;
+            throw error;
+          }
+        }
+
+        level = 2;
+        realParentId = parent.id;
+        rootId = rootCommentId;
+        realReplyToUserId = replyToUserId ?? parent.userId;
+
+        await manager
+          .createQueryBuilder()
+          .update(Comment)
+          .set({ replyCount: () => 'reply_count + 1' })
+          .where('id = :id', { id: rootCommentId })
+          .execute();
+      }
+
+      const comment = manager.create(Comment, {
+        postId,
+        userId: currentUserId,
+        contentText,
+        level,
+        parentId: realParentId,
+        rootId,
+        replyToUserId: realReplyToUserId,
+        replyCount: 0,
+        isDeleted: 0,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+
+      const saved = await manager.save(Comment, comment);
+
+      if (saved.level === 1) {
+        await manager.update(
+          Comment,
+          { id: saved.id },
+          {
+            rootId: saved.id,
+            updatedAt: now,
+          },
+        );
+        saved.rootId = saved.id;
+      }
+
+      await manager
+        .createQueryBuilder()
+        .update(Post)
+        .set({ commentCount: () => 'comment_count + 1' })
+        .where('id = :id', { id: postId })
+        .execute();
+
+      const author = await manager.findOne(User, {
+        where: { id: saved.userId },
+      });
+
+      return {
+        id: saved.id,
+        postId: saved.postId,
+        userId: saved.userId,
+        contentText: saved.contentText,
+        level: saved.level,
+        parentId: saved.parentId,
+        rootId: saved.rootId,
+        replyToUserId: saved.replyToUserId,
+        replyCount: saved.replyCount,
+        createdAt: saved.createdAt,
+        user: author
+          ? {
+              id: author.id,
+              userName: author.userName,
+              avatar: author.avatar,
+              signature: author.signature,
+            }
+          : null,
+      };
+    });
+  }
+
+  async getCommentList(postId: number, page = 1, pageSize = 10) {
+    if (!Number.isInteger(postId) || postId <= 0) {
+      const error: any = new Error('帖子不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+    const safePageSize = Number.isInteger(pageSize) && pageSize > 0 ? Math.min(pageSize, 50) : 10;
+
+    const post = await this.postsRepository.findOne({
+      where: { id: postId, isDeleted: 0 },
+    });
+
+    if (!post) {
+      const error: any = new Error('帖子不存在');
+      error.code = 404;
+      throw error;
+    }
+
+    const [roots, total] = await this.commentsRepository.findAndCount({
+      where: { postId, level: 1, isDeleted: 0 },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (safePage - 1) * safePageSize,
+      take: safePageSize,
+    });
+
+    if (roots.length === 0) {
+      return {
+        list: [],
+        pagination: {
+          page: safePage,
+          pageSize: safePageSize,
+          total,
+          totalPages: Math.ceil(total / safePageSize),
+        },
+      };
+    }
+
+    const rootIds = roots.map((item) => item.id);
+    const replies = await this.commentsRepository.find({
+      where: { postId, level: 2, rootId: In(rootIds), isDeleted: 0 },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+
+    const repliesMap = new Map<number, Comment[]>();
+    for (const reply of replies) {
+      const key = Number(reply.rootId);
+      const list = repliesMap.get(key) || [];
+      list.push(reply);
+      repliesMap.set(key, list);
+    }
+
+    const userIds = Array.from(new Set([...roots.map((item) => Number(item.userId)), ...replies.map((item) => Number(item.userId))]));
+
+    const users = userIds.length
+      ? await this.usersRepository.find({
+          where: userIds.map((id) => ({ id })),
+        })
+      : [];
+
+    const userMap = new Map<number, User>();
+    for (const user of users) {
+      userMap.set(Number(user.id), user);
+    }
+
+    const formatComment = (comment: Comment) => {
+      const author = userMap.get(Number(comment.userId));
+      return {
+        id: comment.id,
+        postId: comment.postId,
+        userId: comment.userId,
+        contentText: comment.contentText,
+        level: comment.level,
+        parentId: comment.parentId,
+        rootId: comment.rootId,
+        replyToUserId: comment.replyToUserId,
+        replyCount: comment.replyCount,
+        createdAt: comment.createdAt,
+        user: author
+          ? {
+              id: author.id,
+              userName: author.userName,
+              avatar: author.avatar,
+              signature: author.signature,
+            }
+          : null,
+      };
+    };
+
+    const list = roots.map((root) => ({
+      ...formatComment(root),
+      replies: (repliesMap.get(root.id) || []).map(formatComment),
+    }));
+
+    return {
+      list,
+      pagination: {
+        page: safePage,
+        pageSize: safePageSize,
+        total,
+        totalPages: Math.ceil(total / safePageSize),
+      },
+    };
+  }
+
+  async deleteComment(commentId: number, currentUserId: number) {
+    if (!Number.isInteger(commentId) || commentId <= 0) {
+      const error: any = new Error('评论不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const comment = await manager.findOne(Comment, {
+        where: { id: commentId },
+      });
+
+      if (!comment || comment.isDeleted === 1) {
+        const error: any = new Error('评论不存在');
+        error.code = 404;
+        throw error;
+      }
+
+      if (Number(comment.userId) !== Number(currentUserId)) {
+        const error: any = new Error('无权限删除该评论');
+        error.code = 403;
+        throw error;
+      }
+
+      const post = await manager.findOne(Post, {
+        where: { id: comment.postId, isDeleted: 0 },
+      });
+
+      if (!post) {
+        const error: any = new Error('帖子不存在');
+        error.code = 404;
+        throw error;
+      }
+
+      const now = new Date();
+
+      if (comment.level === 2) {
+        await manager.update(
+          Comment,
+          { id: comment.id },
+          {
+            isDeleted: 1,
+            deletedAt: now,
+            updatedAt: now,
+          },
+        );
+
+        if (comment.rootId || comment.parentId) {
+          await manager
+            .createQueryBuilder()
+            .update(Comment)
+            .set({ replyCount: () => 'GREATEST(reply_count - 1, 0)', updatedAt: now })
+            .where('id = :id', { id: Number(comment.rootId || comment.parentId) })
+            .execute();
+        }
+
+        await manager
+          .createQueryBuilder()
+          .update(Post)
+          .set({ commentCount: () => 'GREATEST(comment_count - 1, 0)', updatedAt: now })
+          .where('id = :id', { id: comment.postId })
+          .execute();
+
+        return { id: comment.id };
+      }
+
+      const children = await manager.find(Comment, {
+        where: { postId: comment.postId, rootId: comment.id, level: 2, isDeleted: 0 },
+      });
+
+      const childIds = children.map((item) => item.id);
+      const deleteTotal = 1 + childIds.length;
+
+      await manager.update(
+        Comment,
+        { id: comment.id },
+        {
+          isDeleted: 1,
+          deletedAt: now,
+          updatedAt: now,
+          replyCount: 0,
+        },
+      );
+
+      if (childIds.length > 0) {
+        await manager
+          .createQueryBuilder()
+          .update(Comment)
+          .set({
+            isDeleted: 1,
+            deletedAt: now,
+            updatedAt: now,
+          })
+          .where('id IN (:...ids)', { ids: childIds })
+          .execute();
+      }
+
+      await manager
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          commentCount: () => `GREATEST(comment_count - ${deleteTotal}, 0)`,
+          updatedAt: now,
+        })
+        .where('id = :id', { id: comment.postId })
+        .execute();
+
+      return { id: comment.id };
+    });
   }
 }

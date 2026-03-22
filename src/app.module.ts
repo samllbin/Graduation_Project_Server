@@ -11,6 +11,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { PostImage } from './post/post-image.entity';
 import { PostLike } from './post/post-like.entity';
 import { Post } from './post/post.entity';
+import { Comment } from './post/comment.entity';
 import { User } from './user/user.entity';
 
 @Module({
@@ -22,7 +23,7 @@ import { User } from './user/user.entity';
       username: 'root',
       password: 'nnzabb123',
       database: 'Graduation_Project',
-      entities: [User, Post, PostImage, PostLike],
+      entities: [User, Post, PostImage, PostLike, Comment],
       synchronize: false,
     }),
     UserModule,
