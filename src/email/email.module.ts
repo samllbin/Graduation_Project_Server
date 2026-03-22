@@ -1,4 +1,4 @@
-import { Module, Global } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { EmailService } from './email.service';
 import { EmailController } from './email.controller';
 import Redis from 'ioredis';
@@ -19,6 +19,6 @@ import Redis from 'ioredis';
     },
     EmailService,
   ],
-  exports: [EmailService],
+  exports: [EmailService, 'REDIS_CLIENT'],
 })
 export class EmailModule {}

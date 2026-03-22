@@ -13,6 +13,8 @@ import { PostLike } from './post/post-like.entity';
 import { Post } from './post/post.entity';
 import { Comment } from './post/comment.entity';
 import { User } from './user/user.entity';
+import { DiagnosisRecord } from './diagnosis/diagnosis.entity';
+import { DiagnosisModule } from './diagnosis/diagnosis.module';
 
 @Module({
   imports: [
@@ -23,7 +25,7 @@ import { User } from './user/user.entity';
       username: 'root',
       password: 'nnzabb123',
       database: 'Graduation_Project',
-      entities: [User, Post, PostImage, PostLike, Comment],
+      entities: [User, Post, PostImage, PostLike, Comment, DiagnosisRecord],
       synchronize: false,
     }),
     UserModule,
@@ -32,6 +34,7 @@ import { User } from './user/user.entity';
     EmailModule,
     UploadModule,
     PostModule,
+    DiagnosisModule,
   ],
   controllers: [AppController],
   providers: [AppService],
