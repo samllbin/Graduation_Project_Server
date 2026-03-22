@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { PostImage } from './post-image.entity';
+import { PostLike } from './post-like.entity';
 import { Post } from './post.entity';
 
 type CreatePostImageInput = {
@@ -25,6 +26,8 @@ export class PostService {
     private postsRepository: Repository<Post>,
     @InjectRepository(PostImage)
     private postImagesRepository: Repository<PostImage>,
+    @InjectRepository(PostLike)
+    private postLikesRepository: Repository<PostLike>,
     private dataSource: DataSource,
   ) {}
 
@@ -217,6 +220,119 @@ export class PostService {
     };
   }
 
+  async likePost(postId: number, currentUserId: number) {
+    if (!Number.isInteger(postId) || postId <= 0) {
+      const error: any = new Error('帖子不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    return this.postLikesRepository.manager.transaction(async (manager) => {
+      const post = await manager.findOne(Post, {
+        where: { id: postId, isDeleted: 0 },
+      });
+
+      if (!post) {
+        const error: any = new Error('帖子不存在');
+        error.code = 404;
+        throw error;
+      }
+
+      const insertResult = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(PostLike)
+        .values({
+          postId,
+          userId: currentUserId,
+          createdAt: new Date(),
+        })
+        .orIgnore()
+        .execute();
+
+      if ((insertResult.raw?.affectedRows || insertResult.identifiers.length || 0) > 0) {
+        await manager
+          .createQueryBuilder()
+          .update(Post)
+          .set({
+            likeCount: () => 'like_count + 1',
+          })
+          .where('id = :id', { id: postId })
+          .execute();
+      }
+
+      const latestPost = await manager.findOne(Post, {
+        where: { id: postId },
+      });
+
+      return {
+        id: postId,
+        liked: true,
+        likeCount: latestPost?.likeCount || 0,
+      };
+    });
+  }
+
+  async unlikePost(postId: number, currentUserId: number) {
+    if (!Number.isInteger(postId) || postId <= 0) {
+      const error: any = new Error('帖子不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    return this.postLikesRepository.manager.transaction(async (manager) => {
+      const post = await manager.findOne(Post, {
+        where: { id: postId, isDeleted: 0 },
+      });
+
+      if (!post) {
+        const error: any = new Error('帖子不存在');
+        error.code = 404;
+        throw error;
+      }
+
+      const deleteResult = await manager
+        .createQueryBuilder()
+        .delete()
+        .from(PostLike)
+        .where('post_id = :postId AND user_id = :userId', { postId, userId: currentUserId })
+        .execute();
+
+      if ((deleteResult.affected || 0) > 0) {
+        await manager
+          .createQueryBuilder()
+          .update(Post)
+          .set({
+            likeCount: () => 'GREATEST(like_count - 1, 0)',
+          })
+          .where('id = :id', { id: postId })
+          .execute();
+      }
+
+      const latestPost = await manager.findOne(Post, {
+        where: { id: postId },
+      });
+
+      return {
+        id: postId,
+        liked: false,
+        likeCount: latestPost?.likeCount || 0,
+      };
+    });
+  }
+
   async deleteOwnPost(postId: number, currentUserId: number) {
     if (!Number.isInteger(postId) || postId <= 0) {
       const error: any = new Error('帖子不存在');
@@ -240,7 +356,7 @@ export class PostService {
       throw error;
     }
 
-    if (post.userId !== currentUserId) {
+    if (Number(post.userId) !== Number(currentUserId)) {
       const error: any = new Error('无权限删除该帖子');
       error.code = 403;
       throw error;

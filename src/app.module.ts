@@ -9,6 +9,7 @@ import { UploadModule } from './upload/upload.module';
 import { PostModule } from './post/post.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PostImage } from './post/post-image.entity';
+import { PostLike } from './post/post-like.entity';
 import { Post } from './post/post.entity';
 import { User } from './user/user.entity';
 
@@ -21,7 +22,7 @@ import { User } from './user/user.entity';
       username: 'root',
       password: 'nnzabb123',
       database: 'Graduation_Project',
-      entities: [User, Post, PostImage],
+      entities: [User, Post, PostImage, PostLike],
       synchronize: false,
     }),
     UserModule,

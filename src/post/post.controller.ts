@@ -80,6 +80,44 @@ export class PostController {
   }
 
   @UseGuards(AuthGuard)
+  @Post('like')
+  async like(@Body() body: { id: number }, @Req() req: any) {
+    try {
+      const result = await this.postService.likePost(body?.id, req.user.sub);
+
+      return {
+        code: 200,
+        message: '点赞成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('unlike')
+  async unlike(@Body() body: { id: number }, @Req() req: any) {
+    try {
+      const result = await this.postService.unlikePost(body?.id, req.user.sub);
+
+      return {
+        code: 200,
+        message: '取消点赞成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
+
+  @UseGuards(AuthGuard)
   @Post('delete')
   async delete(@Body() body: { id: number }, @Req() req: any) {
     try {
