@@ -125,4 +125,53 @@ export class PostService {
       };
     });
   }
+
+  async getPostList(sortBy?: string) {
+    const normalizedSort = sortBy === 'likes' ? 'likes' : 'time';
+    const orderBy = normalizedSort === 'likes' ? { likeCount: 'DESC' as const } : { createdAt: 'DESC' as const };
+
+    const posts = await this.postsRepository.find({
+      where: { isDeleted: 0 },
+      order: {
+        ...orderBy,
+        id: 'DESC',
+      },
+    });
+
+    if (posts.length === 0) {
+      return [];
+    }
+
+    const postIds = posts.map((post) => post.id);
+    const postImages = await this.postImagesRepository.find({
+      where: postIds.map((postId) => ({ postId })),
+      order: { sortOrder: 'ASC' },
+    });
+
+    const imagesMap = new Map<number, PostImage[]>();
+    for (const image of postImages) {
+      const list = imagesMap.get(image.postId) || [];
+      list.push(image);
+      imagesMap.set(image.postId, list);
+    }
+
+    return posts.map((post) => ({
+      id: post.id,
+      userId: post.userId,
+      title: post.title,
+      contentText: post.contentText,
+      coverImageUrl: post.coverImageUrl,
+      imageCount: post.imageCount,
+      commentCount: post.commentCount,
+      likeCount: post.likeCount,
+      viewCount: post.viewCount,
+      createdAt: post.createdAt,
+      images: (imagesMap.get(post.id) || []).map((image) => ({
+        imageUrl: image.imageUrl,
+        sortOrder: image.sortOrder,
+        width: image.width,
+        height: image.height,
+      })),
+    }));
+  }
 }
