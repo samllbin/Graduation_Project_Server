@@ -174,4 +174,88 @@ export class PostService {
       })),
     }));
   }
+
+  async getPostDetail(postId: number) {
+    if (!Number.isInteger(postId) || postId <= 0) {
+      const error: any = new Error('帖子不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    const post = await this.postsRepository.findOne({
+      where: { id: postId, isDeleted: 0 },
+    });
+
+    if (!post) {
+      const error: any = new Error('帖子不存在');
+      error.code = 404;
+      throw error;
+    }
+
+    const images = await this.postImagesRepository.find({
+      where: { postId: post.id },
+      order: { sortOrder: 'ASC' },
+    });
+
+    return {
+      id: post.id,
+      userId: post.userId,
+      title: post.title,
+      contentText: post.contentText,
+      coverImageUrl: post.coverImageUrl,
+      imageCount: post.imageCount,
+      commentCount: post.commentCount,
+      likeCount: post.likeCount,
+      viewCount: post.viewCount,
+      createdAt: post.createdAt,
+      images: images.map((image) => ({
+        imageUrl: image.imageUrl,
+        sortOrder: image.sortOrder,
+        width: image.width,
+        height: image.height,
+      })),
+    };
+  }
+
+  async deleteOwnPost(postId: number, currentUserId: number) {
+    if (!Number.isInteger(postId) || postId <= 0) {
+      const error: any = new Error('帖子不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    const post = await this.postsRepository.findOne({
+      where: { id: postId },
+    });
+
+    if (!post || post.isDeleted === 1) {
+      const error: any = new Error('帖子不存在');
+      error.code = 404;
+      throw error;
+    }
+
+    if (post.userId !== currentUserId) {
+      const error: any = new Error('无权限删除该帖子');
+      error.code = 403;
+      throw error;
+    }
+
+    const now = new Date();
+    await this.postsRepository.update(
+      { id: post.id },
+      {
+        isDeleted: 1,
+        deletedAt: now,
+        updatedAt: now,
+      },
+    );
+
+    return { id: post.id };
+  }
 }

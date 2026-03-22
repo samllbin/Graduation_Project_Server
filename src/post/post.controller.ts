@@ -60,4 +60,41 @@ export class PostController {
       };
     }
   }
+
+  @Get('detail')
+  async detail(@Query('id') id?: string) {
+    try {
+      const post = await this.postService.getPostDetail(Number(id));
+
+      return {
+        code: 200,
+        message: '获取帖子详情成功',
+        data: post,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('delete')
+  async delete(@Body() body: { id: number }, @Req() req: any) {
+    try {
+      const result = await this.postService.deleteOwnPost(body?.id, req.user.sub);
+
+      return {
+        code: 200,
+        message: '删除帖子成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: error.code || 400,
+        message: error.message,
+      };
+    }
+  }
 }
