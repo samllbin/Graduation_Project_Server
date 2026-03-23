@@ -1,5 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { readFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import Redis from 'ioredis';
 import { DataSource, Repository } from 'typeorm';
 import { DiagnosisRecord } from './diagnosis.entity';
@@ -27,6 +29,21 @@ export class DiagnosisService {
   private readonly remoteTimeoutMs = Math.max(
     Number(process.env.DIAGNOSIS_REMOTE_TIMEOUT_MS || 30000),
     1000,
+  );
+
+  private readonly agriBaseUrl = (
+    process.env.DIAGNOSIS_AGRI_BASE_URL || this.remoteDiagnosisUrl
+  ).trim();
+  private readonly agriSubmitUrl = (process.env.DIAGNOSIS_AGRI_SUBMIT_URL || '').trim();
+  private readonly agriResultUrlTemplate = (
+    process.env.DIAGNOSIS_AGRI_RESULT_URL_TEMPLATE || ''
+  ).trim();
+  private readonly agriTaskType = (process.env.DIAGNOSIS_AGRI_TASK_TYPE || 'classify').trim();
+  private readonly agriModelName = (process.env.DIAGNOSIS_AGRI_MODEL_NAME || '').trim();
+  private readonly agriModelVersion = (process.env.DIAGNOSIS_AGRI_MODEL_VERSION || '').trim();
+  private readonly agriPollIntervalMs = Math.max(
+    Number(process.env.DIAGNOSIS_AGRI_POLL_INTERVAL_MS || 1000),
+    300,
   );
 
   constructor(
@@ -230,41 +247,101 @@ return {1, used, remaining}
     symptomText?: string;
     cropType?: string;
   }): Promise<RemoteDiagnosisResult> {
-    if (!this.remoteDiagnosisUrl) {
-      throw new Error('未配置远程诊断服务地址');
+    const submitUrl = this.buildAgriSubmitUrl();
+    if (!submitUrl) {
+      throw new Error('未配置农业AI提交地址');
     }
 
+    const modelName = this.agriModelName;
+    const modelVersion = this.agriModelVersion;
+    if (!this.agriSubmitUrl && (!modelName || !modelVersion)) {
+      throw new Error('未配置农业AI模型名称或版本');
+    }
+
+    const taskType = this.resolveTaskTypeByUrl(submitUrl);
+    const imageBytes = await this.loadImageBytes(input.imageUrl);
+    const fileName = this.resolveImageFileName(input.imageUrl);
+    const mimeType = this.resolveMimeType(fileName);
+
+    const imageArrayBuffer = imageBytes.buffer.slice(
+      imageBytes.byteOffset,
+      imageBytes.byteOffset + imageBytes.byteLength,
+    ) as ArrayBuffer;
+
+    const formData = new FormData();
+    formData.append('image', new File([imageArrayBuffer], fileName, { type: mimeType }));
+
+    const submitHeaders: Record<string, string> = {};
+    if (this.remoteDiagnosisToken) {
+      submitHeaders.Authorization = `Bearer ${this.remoteDiagnosisToken}`;
+    }
+
+    const submitPayload = await this.fetchJson(submitUrl, {
+      method: 'POST',
+      headers: submitHeaders,
+      body: formData,
+    });
+
+    const taskId = submitPayload?.data?.task_id || submitPayload?.task_id;
+    if (!taskId) {
+      throw new Error('农业AI未返回任务ID');
+    }
+
+    const resultUrl = this.buildAgriResultUrl(submitUrl, taskType, String(taskId));
+    if (!resultUrl) {
+      throw new Error('无法构建农业AI结果查询地址');
+    }
+
+    const startedAt = Date.now();
+    while (true) {
+      if (Date.now() - startedAt > this.remoteTimeoutMs) {
+        throw new Error('远程诊断接口超时');
+      }
+
+      const resultPayload = await this.fetchJson(resultUrl, {
+        method: 'GET',
+        headers: submitHeaders,
+      });
+
+      const data = resultPayload?.data ?? resultPayload;
+      const status = String(data?.status || '').toLowerCase();
+
+      if (status === 'success') {
+        const normalized = {
+          data: {
+            result: this.normalizePredictionToResult(data?.predictions),
+          },
+        };
+        return this.extractRemoteResult(normalized);
+      }
+
+      if (status === 'failure') {
+        const message =
+          resultPayload?.message || data?.message || resultPayload?.error || '农业AI任务执行失败';
+        throw new Error(message);
+      }
+
+      await this.sleep(this.agriPollIntervalMs);
+    }
+  }
+
+  private async fetchJson(url: string, init: RequestInit): Promise<any> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.remoteTimeoutMs);
 
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (this.remoteDiagnosisToken) {
-        headers.Authorization = `Bearer ${this.remoteDiagnosisToken}`;
-      }
-
-      const response = await fetch(this.remoteDiagnosisUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          imageUrl: input.imageUrl,
-          symptomText: input.symptomText,
-          cropType: input.cropType,
-        }),
+      const response = await fetch(url, {
+        ...init,
         signal: controller.signal,
       });
 
       const payload = await response.json().catch(() => null);
-
       if (!response.ok) {
         const message = payload?.message || `远程诊断接口调用失败(${response.status})`;
         throw new Error(message);
       }
 
-      return this.extractRemoteResult(payload);
+      return payload;
     } catch (e: any) {
       if (e?.name === 'AbortError') {
         throw new Error('远程诊断接口超时');
@@ -273,6 +350,142 @@ return {1, used, remaining}
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private buildAgriSubmitUrl(): string {
+    if (this.agriSubmitUrl) {
+      return this.agriSubmitUrl;
+    }
+
+    if (!this.agriBaseUrl) {
+      return '';
+    }
+
+    const base = this.agriBaseUrl.replace(/\/+$/, '');
+    if (/\/ai\/(detect|classify)\//.test(base)) {
+      return base;
+    }
+
+    const taskType = this.normalizeTaskType(this.agriTaskType);
+    return `${base}/ai/${taskType}/${this.agriModelName}/${this.agriModelVersion}`;
+  }
+
+  private buildAgriResultUrl(submitUrl: string, taskType: 'detect' | 'classify', taskId: string): string {
+    if (this.agriResultUrlTemplate) {
+      return this.agriResultUrlTemplate.replace('{taskId}', taskId);
+    }
+
+    const matched = submitUrl.match(/^(.*\/ai\/(detect|classify))\/[^/]+\/[^/]+\/?$/);
+    if (matched) {
+      return `${matched[1]}/result/${taskId}`;
+    }
+
+    const base = this.agriBaseUrl.replace(/\/+$/, '');
+    return `${base}/ai/${taskType}/result/${taskId}`;
+  }
+
+  private resolveTaskTypeByUrl(submitUrl: string): 'detect' | 'classify' {
+    if (/\/ai\/detect\//.test(submitUrl)) {
+      return 'detect';
+    }
+    if (/\/ai\/classify\//.test(submitUrl)) {
+      return 'classify';
+    }
+    return this.normalizeTaskType(this.agriTaskType);
+  }
+
+  private normalizeTaskType(taskType: string): 'detect' | 'classify' {
+    return taskType.toLowerCase() === 'detect' ? 'detect' : 'classify';
+  }
+
+  private async loadImageBytes(imageUrl: string): Promise<Buffer> {
+    if (imageUrl.startsWith('uploads/')) {
+      const localPath = join(process.cwd(), imageUrl);
+      return readFile(localPath);
+    }
+
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`图片下载失败(${response.status})`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  private resolveImageFileName(imageUrl: string): string {
+    if (imageUrl.startsWith('uploads/')) {
+      const parts = imageUrl.split('/');
+      return parts[parts.length - 1] || 'diagnosis.jpg';
+    }
+
+    try {
+      const parsed = new URL(imageUrl);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      return segments[segments.length - 1] || 'diagnosis.jpg';
+    } catch {
+      return 'diagnosis.jpg';
+    }
+  }
+
+  private resolveMimeType(fileName: string): string {
+    const ext = extname(fileName).toLowerCase();
+    if (ext === '.png') {
+      return 'image/png';
+    }
+    if (ext === '.webp') {
+      return 'image/webp';
+    }
+    return 'image/jpeg';
+  }
+
+  private normalizePredictionToResult(predictions: any): {
+    label: string;
+    confidence: number;
+    detail: string;
+  } {
+    if (!Array.isArray(predictions) || predictions.length === 0) {
+      throw new Error('农业AI返回结果为空');
+    }
+
+    const best = predictions.reduce((acc: any, item: any) => {
+      const accScore = Number(acc?.confidence ?? acc?.score ?? acc?.probability ?? acc?.conf ?? 0);
+      const itemScore = Number(item?.confidence ?? item?.score ?? item?.probability ?? item?.conf ?? 0);
+      return itemScore > accScore ? item : acc;
+    }, predictions[0]);
+
+    const label =
+      best?.label ||
+      best?.class_name ||
+      best?.class ||
+      best?.name ||
+      best?.disease ||
+      best?.category ||
+      '';
+
+    const confidence = Number(
+      best?.confidence ?? best?.score ?? best?.probability ?? best?.conf ?? Number.NaN,
+    );
+
+    const detail =
+      best?.detail ||
+      best?.description ||
+      best?.disease_description ||
+      `诊断结果：${label}，置信度：${Number.isFinite(confidence) ? confidence.toFixed(4) : '未知'}`;
+
+    if (!label || !Number.isFinite(confidence)) {
+      throw new Error('农业AI返回结果格式不正确');
+    }
+
+    return {
+      label,
+      confidence,
+      detail,
+    };
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private extractRemoteResult(payload: any): RemoteDiagnosisResult {
