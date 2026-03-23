@@ -175,6 +175,86 @@ export class DiagnosisService {
     }
   }
 
+  async getDiagnosisList(userId: number, page = 1, pageSize = 10) {
+    if (!Number.isInteger(userId) || userId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+    const safePageSize = Number.isInteger(pageSize) && pageSize > 0 ? Math.min(pageSize, 50) : 10;
+
+    const [records, total] = await this.diagnosisRepository.findAndCount({
+      where: { userId },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (safePage - 1) * safePageSize,
+      take: safePageSize,
+    });
+
+    return {
+      list: records.map((item) => ({
+        id: item.id,
+        userId: item.userId,
+        imageUrl: item.imageUrl,
+        symptomText: item.symptomText,
+        cropType: item.cropType,
+        status: item.status,
+        resultLabel: item.resultLabel,
+        resultConfidence: item.resultConfidence ? Number(item.resultConfidence) : null,
+        resultDetail: item.resultDetail,
+        errorMessage: item.errorMessage,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+      pagination: {
+        page: safePage,
+        pageSize: safePageSize,
+        total,
+        totalPages: Math.ceil(total / safePageSize),
+      },
+    };
+  }
+
+  async getDiagnosisDetail(userId: number, diagnosisId: number) {
+    if (!Number.isInteger(userId) || userId <= 0) {
+      const error: any = new Error('用户信息无效');
+      error.code = 401;
+      throw error;
+    }
+
+    if (!Number.isInteger(diagnosisId) || diagnosisId <= 0) {
+      const error: any = new Error('诊断记录不存在');
+      error.code = 400;
+      throw error;
+    }
+
+    const record = await this.diagnosisRepository.findOne({
+      where: { id: diagnosisId, userId },
+    });
+
+    if (!record) {
+      const error: any = new Error('诊断记录不存在');
+      error.code = 404;
+      throw error;
+    }
+
+    return {
+      id: record.id,
+      userId: record.userId,
+      imageUrl: record.imageUrl,
+      symptomText: record.symptomText,
+      cropType: record.cropType,
+      status: record.status,
+      resultLabel: record.resultLabel,
+      resultConfidence: record.resultConfidence ? Number(record.resultConfidence) : null,
+      resultDetail: record.resultDetail,
+      errorMessage: record.errorMessage,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    };
+  }
+
   private async consumeQuota(userId: number): Promise<{
     allowed: boolean;
     used: number;
