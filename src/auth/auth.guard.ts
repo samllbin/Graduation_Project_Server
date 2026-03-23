@@ -20,6 +20,21 @@ export class AuthGuard implements CanActivate {
 
     try {
       const payload = await this.authService.verifyToken(token);
+      const currentIp = this.authService.extractClientIp(request);
+
+      if (!currentIp) {
+        return false;
+      }
+
+      const ipMatched = await this.authService.checkLoginIp(
+        Number(payload.sub),
+        currentIp,
+      );
+
+      if (!ipMatched) {
+        return false;
+      }
+
       request.user = payload;
       return true;
     } catch (error) {

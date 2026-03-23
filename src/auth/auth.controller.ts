@@ -1,4 +1,4 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Body, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UserService } from '../user/user.service';
 import { JwtService } from '@nestjs/jwt';
@@ -12,7 +12,10 @@ export class AuthController {
   ) {}
 
   @Post('login')
-  async login(@Body() loginDto: { userName: string; password: string }) {
+  async login(
+    @Req() req: any,
+    @Body() loginDto: { userName: string; password: string },
+  ) {
     const user = await this.userService.findOne(loginDto.userName);
     if (!user || user.password !== loginDto.password) {
       return {
@@ -20,6 +23,16 @@ export class AuthController {
         message: 'Invalid credentials',
       };
     }
+
+    const clientIp = this.authService.extractClientIp(req);
+    if (!clientIp) {
+      return {
+        code: 401,
+        message: 'Invalid login ip',
+      };
+    }
+
+    await this.authService.setLoginIp(user.id, clientIp);
 
     // 短 token
     const accessToken = this.jwtService.sign({
